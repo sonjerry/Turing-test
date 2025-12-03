@@ -194,19 +194,23 @@ def format_korean_time(dt=None):
 
 def capture_all_regions():
     """
-    REGIONS에 정의된 구역의 텍스트를 읽어 dict로 반환.
+    title/preview 구역의 텍스트를 읽어 dict로 반환.
     - 화면에서 'time' OCR은 하지 않고, OS 시간으로 채움.
+    - 실제 캡쳐는 CAPTURE_REGIONS(테두리 안쪽) 사용
     """
     data = {}
-    for key, region in REGIONS.items():
-        if key == "time":
-            # time은 화면 캡쳐 대신 OS 시간 사용
-            continue
+    for key, region in CAPTURE_REGIONS.items():
         try:
             data[key] = ocr_region(region)
         except Exception as e:
             print(f"OCR 오류 ({key}):", e)
             data[key] = ""
+
+    # OS 시간 추가 (예: '오후 11:59')
+    data["time"] = format_korean_time()
+
+    return data
+
 
     # OS 시간 추가 (예: '오후 11:59')
     data["time"] = format_korean_time()
@@ -220,17 +224,20 @@ def capture_all_regions():
 
 last_title_text = None
 last_preview_text = None
+last_title_text = None
+last_preview_text = None
 
 
 def trigger_region_changed():
     """
     title / preview 영역의 텍스트가 이전과 달라졌는지 확인.
     둘 중 하나라도 변경되면 True 반환.
+    캡쳐 영역은 CAPTURE_REGIONS(테두리 안쪽)를 사용.
     """
     global last_title_text, last_preview_text
 
-    title_region = REGIONS.get("title")
-    preview_region = REGIONS.get("preview")
+    title_region = CAPTURE_REGIONS.get("title")
+    preview_region = CAPTURE_REGIONS.get("preview")
 
     curr_title = ocr_region(title_region) if title_region else ""
     curr_preview = ocr_region(preview_region) if preview_region else ""

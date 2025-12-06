@@ -1,215 +1,168 @@
-# main.py
-
 import threading
-from datetime import datetime
 
 import tkinter as tk
 from tkinter import ttk
 
-import macro  # ← 요렇게
+import macro  # watcher_loop 사용
 
 # ---------------------
 # 디버그 오버레이 설정
 # ---------------------
 DEBUG_OVERLAY = True          # False로 바꾸면 박스 안 뜸
-region_overlays = {}          # {key: (win, frame)}
-# trigger_overlay = None      # ← 트리거 박스 제거
-
+# region_overlays = {}          # {key: Toplevel}
 
 # ---------------------
-# 데이터 스택 / GUI 전역
+# 스택/리스트 저장 구조
 # ---------------------
 message_stack = []
-root = None
-tree = None
+
+# GUI 전역 변수
+text_area = None
 
 
 # ---------------------
-# GUI와 연동되는 함수들
+# 화면 오버레이(디버그 박스) 구현
 # ---------------------
 
-def add_message_to_stack_and_gui(data):
+def create_overlay_window(key, region, color="#ff0000"):
     """
-    OCR로 뽑은 data(dict)를 스택에 push하고,
-    Tkinter Treeview에도 한 줄 추가
+    region: (left, top, width, height)
+    화면 절대좌표에 박스를 표시하는 작은 투명/얇은 윈도우 생성.
     """
-    global message_stack, tree, root
+    import tkinter as tk
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if not DEBUG_OVERLAY or region is None:
+        return
 
-    entry = {
-        "timestamp": timestamp,
-        "title": data.get("title", ""),
-        "preview": data.get("preview", ""),
-        "time": data.get("time", ""),
+    if len(region) != 4:
+        print(f"[WARN] {key} region length != 4: {region}")
+        return
+
+    x, y, w, h = region
+
+    # 박스용 최상위 창
+    win = tk.Toplevel()
+    win.overrideredirect(True)    # 타이틀바 제거
+    win.attributes("-topmost", True)
+    try:
+        win.attributes("-alpha", 0.7)   # 일부 OS에서 투명도 적용
+    except Exception:
+        pass
+
+    # 테두리만 표시되는 프레임
+    frame = tk.Frame(
+        win, bg=color, highlightthickness=2, highlightbackground=color
+    )
+    frame.pack(fill="both", expand=True)
+
+    win.geometry(f"{w}x{h}+{x}+{y}")
+
+    # 별도의 딕셔너리에 저장하지 않고, 함수 범위 내에서만 띄움
+    # 필요 시 갱신 로직을 추가할 수 있음
+
+
+def init_region_overlays():
+    """macro.TRIGGER_REGION / REGIONS 에 등록된 위치에 디버그 박스 표시."""
+    if not DEBUG_OVERLAY:
+        return
+
+    # 트리거 박스
+    trigger_region = getattr(macro, "TRIGGER_REGION", None)
+    create_overlay_window("TRIGGER", trigger_region, color="#00ff00")
+
+    # 텍스트 추출용 영역들
+    regions = getattr(macro, "REGIONS", None)
+    if isinstance(regions, dict):
+        for key, reg in regions.items():
+            create_overlay_window(key, reg, color="#ff0000")
+
+
+# ---------------------
+# 매크로에서 인식 감지될 때 callback
+# ---------------------
+
+def on_detect(data: dict):
+    """
+    data 예:
+    {
+        "timestamp": "...",
+        "title": "...",
+        "preview": "...",
+        "time": "..."
     }
-
-    message_stack.append(entry)
-
-    def _insert_row():
-        tree.insert(
-            "",
-            "end",
-            values=(entry["timestamp"], entry["title"],
-                    entry["preview"], entry["time"])
-        )
-
-    root.after(0, _insert_row)
-
-
-# ---------------------
-# 오버레이 관련 함수
-# ---------------------
-
-def create_overlays():
     """
-    title / preview 두 개만 박스로 표시
-    """
-    global region_overlays, root
+    # 새 메시지를 스택에 쌓기
+    message_stack.append(data)
+    print("감지됨:", data)
 
-    if not DEBUG_OVERLAY:
+    # GUI 갱신: 메인 스레드에서 수행해야 함
+    if text_area is not None:
+        root.after(0, update_text_area)
+
+
+def update_text_area():
+    """Stack 내용을 text_area에 표시."""
+    if text_area is None:
         return
 
-    transparent_color = "magenta"
+    text_area.config(state="normal")
+    text_area.delete("1.0", "end")
 
-    # title, preview만 오버레이 생성
-    for key in ("title", "preview"):
-        region = macro.REGIONS.get(key)
-        if region is None:
-            continue
+    # 단순하게 message_stack 전체를 문자열로 보여줌
+    for msg in message_stack:
+        title = msg.get("title", "")
+        preview = msg.get("preview", "")
+        time_str = msg.get("time", "")
+        ts = msg.get("timestamp", "")
+        text_area.insert("end", f"[{ts}] {title} / {preview} / {time_str}\n")
 
-        left, top, width, height = region
-
-        win = tk.Toplevel(root)
-        win.overrideredirect(True)        # 타이틀바 제거
-        win.attributes("-topmost", True)
-
-        win.configure(bg=transparent_color)
-        win.attributes("-transparentcolor", transparent_color)
-
-        frame = tk.Frame(
-            win,
-            bg=transparent_color,          # 통째로 투명 처리
-            highlightbackground="red",     # 테두리 색
-            highlightthickness=2           # 테두리 두께
-        )
-        frame.pack(fill="both", expand=True)
-
-        win.geometry(f"{width}x{height}+{left}+{top}")
-
-        region_overlays[key] = (win, frame)
+    text_area.config(state="disabled")
 
 
-def flash_overlays(times=3, interval=150):
-    """
-    감지 시 title/preview 박스만 깜빡이기
-    """
-    if not DEBUG_OVERLAY:
-        return
-
-    def _flash(step):
-        # step이 0이면 원래 색으로 초기화하고 끝
-        if step <= 0:
-            for key, (win, frame) in region_overlays.items():
-                frame.config(highlightbackground="red")
-            return
-
-        bright = (step % 2 == 1)
-
-        # 일반 영역만 노랑/빨강 깜빡이기
-        for key, (win, frame) in region_overlays.items():
-            frame.config(highlightbackground="yellow" if bright else "red")
-
-        root.after(interval, _flash, step - 1)
-
-    root.after(0, _flash, times * 2)
+def on_flash():
+    """매크로의 트리거 바운스(깜빡임) 이벤트 콜백. 여기서는 단순 출력."""
+    print("FLASH detected - 트리거 깜빡임")
 
 
 # ---------------------
-# Tkinter GUI 설정
+# GUI 초기화
 # ---------------------
 
-def setup_gui():
-    global root, tree
+def init_gui():
+    global text_area, root
 
     root = tk.Tk()
-    root.title("Turning-test 제어판")
+    root.title("카카오톡 메시지 디버그 뷰어")
+    root.geometry("800x600")
 
-    # 화면 크기 얻기
-    screen_w = root.winfo_screenwidth()
-    screen_h = root.winfo_screenheight()
+    # 스크롤바 + Text 영역
+    frame = ttk.Frame(root)
+    frame.pack(fill="both", expand=True)
 
-    # GUI 창 크기 (원하는 대로 조절 가능)
-    win_w = 600
-    win_h = 300
+    text_area_local = tk.Text(frame, wrap="none", state="disabled")
+    text_area_local.pack(side="left", fill="both", expand=True)
 
-    # 오른쪽 아래에 붙이기 (여유 20px)
-    x = screen_w - win_w - 20
-    y = screen_h - win_h - 60   # 작업표시줄 감안해서 살짝 위로
-
-    root.geometry(f"{win_w}x{win_h}+{x}+{y}")
-
-    # 상단 안내 라벨
-    label = tk.Label(root, text="감지된 메시지 리스트", font=("맑은 고딕", 12))
-    label.pack(pady=5)
-
-    # Treeview (테이블 형태)
-    columns = ("timestamp", "title", "preview", "time")
-    tree = ttk.Treeview(root, columns=columns, show="headings", height=15)
-
-    tree.heading("timestamp", text="감지 시각")
-    tree.heading("title", text="방 제목/구역1")
-    tree.heading("preview", text="메시지/구역2")
-    tree.heading("time", text="시간")
-
-    tree.column("timestamp", width=150)
-    tree.column("title", width=200)
-    tree.column("preview", width=300)
-    tree.column("time", width=80)
-
-    tree.pack(fill="both", expand=True, padx=10, pady=5)
-
-    # 스크롤바
-    scrollbar = ttk.Scrollbar(root, orient="vertical", command=tree.yview)
-    tree.configure(yscrollcommand=scrollbar.set)
+    scrollbar = ttk.Scrollbar(frame, orient="vertical", command=text_area_local.yview)
     scrollbar.pack(side="right", fill="y")
 
-    # 하단 버튼들 (예: 스택 초기화)
-    button_frame = tk.Frame(root)
-    button_frame.pack(pady=5)
+    text_area_local.configure(yscrollcommand=scrollbar.set)
 
-    def clear_stack():
-        message_stack.clear()
-        for item in tree.get_children():
-            tree.delete(item)
+    text_area = text_area_local
 
-    clear_btn = tk.Button(button_frame, text="스택 비우기", command=clear_stack)
-    clear_btn.pack(side="left", padx=5)
-
-    # 프로그램 켜질 때 바로 오버레이 박스 생성
-    create_overlays()
+    # 디버그 박스(화면 오버레이) 생성
+    init_region_overlays()
 
     return root
 
 
 # ---------------------
-# 메인
+# 메인 실행
 # ---------------------
 
-if __name__ == "__main__":
-    # GUI 세팅
-    root = setup_gui()
+def main():
+    root = init_gui()
 
-    # 감지 콜백 정의
-    def on_detect(data):
-        add_message_to_stack_and_gui(data)
-
-    # 깜빡이기 콜백 정의
-    def on_flash():
-        # Tkinter 메인 스레드에서 실행되도록 after 사용
-        root.after(0, flash_overlays, 3, 150)
-
-    # 감시 스레드 시작
+    # 감시 스레드 시작 (매크로 watcher)
     t = threading.Thread(
         target=macro.watcher_loop,
         args=(on_detect, on_flash),
@@ -217,5 +170,8 @@ if __name__ == "__main__":
     )
     t.start()
 
-    # Tkinter 메인 루프
     root.mainloop()
+
+
+if __name__ == "__main__":
+    main()

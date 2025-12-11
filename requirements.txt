@@ -1,0 +1,19 @@
+# GUI 및 화면 제어
+pyautogui>=0.9.54
+pyperclip>=1.8.2
+
+# 이미지 처리 및 OCR
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0
+easyocr>=1.7.0
+
+# 키보드 입력 감지
+keyboard>=0.13.5
+
+# OpenAI API
+openai>=1.0.0
+
+# 환경 변수 관리
+python-dotenv>=1.0.0
+

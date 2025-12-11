@@ -1,175 +1,139 @@
-import threading
+# OpenMP 중복 초기화 오류 해결
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
+import threading
 import tkinter as tk
 from tkinter import ttk
 
-import macro  # watcher_loop 사용
-
-# ---------------------
-# 디버그 오버레이 설정
-# ---------------------
-DEBUG_OVERLAY = True          # False로 바꾸면 박스 안 뜸
-# region_overlays = {}          # {key: Toplevel}
-
-# ---------------------
-# 스택/리스트 저장 구조
-# ---------------------
-message_stack = []
-
-# GUI 전역 변수
-text_area = None
+import macro
+import gui  # PreviewStackgui 사용
+import schedular
 
 
-# ---------------------
-# 화면 오버레이(디버그 박스) 구현
-# ---------------------
-
-def create_overlay_window(key, region, color="#ff0000"):
-    """
-    region: (left, top, width, height)
-    화면 절대좌표에 박스를 표시하는 작은 투명/얇은 윈도우 생성.
-    """
-    import tkinter as tk
-
-    if not DEBUG_OVERLAY or region is None:
-        return
-
-    if len(region) != 4:
-        print(f"[WARN] {key} region length != 4: {region}")
-        return
-
-    x, y, w, h = region
-
-    # 박스용 최상위 창
-    win = tk.Toplevel()
-    win.overrideredirect(True)    # 타이틀바 제거
-    win.attributes("-topmost", True)
-    try:
-        win.attributes("-alpha", 0.7)   # 일부 OS에서 투명도 적용
-    except Exception:
-        pass
-
-    # 테두리만 표시되는 프레임
-    frame = tk.Frame(
-        win, bg=color, highlightthickness=2, highlightbackground=color
-    )
-    frame.pack(fill="both", expand=True)
-
-    win.geometry(f"{w}x{h}+{x}+{y}")
-
-    # 별도의 딕셔너리에 저장하지 않고, 함수 범위 내에서만 띄움
-    # 필요 시 갱신 로직을 추가할 수 있음
-
-
-def init_region_overlays():
-    """macro.TRIGGER_REGION / REGIONS 에 등록된 위치에 디버그 박스 표시."""
-    if not DEBUG_OVERLAY:
-        return
-
-    # 트리거 박스
-    trigger_region = getattr(macro, "TRIGGER_REGION", None)
-    create_overlay_window("TRIGGER", trigger_region, color="#00ff00")
-
-    # 텍스트 추출용 영역들
-    regions = getattr(macro, "REGIONS", None)
-    if isinstance(regions, dict):
-        for key, reg in regions.items():
-            create_overlay_window(key, reg, color="#ff0000")
-
-
-# ---------------------
-# 매크로에서 인식 감지될 때 callback
-# ---------------------
-
-def on_detect(data: dict):
-    """
-    data 예:
-    {
-        "timestamp": "...",
-        "title": "...",
-        "preview": "...",
-        "time": "..."
-    }
-    """
-    # 새 메시지를 스택에 쌓기
-    message_stack.append(data)
-    print("감지됨:", data)
-
-    # GUI 갱신: 메인 스레드에서 수행해야 함
-    if text_area is not None:
-        root.after(0, update_text_area)
-
-
-def update_text_area():
-    """Stack 내용을 text_area에 표시."""
-    if text_area is None:
-        return
-
-    text_area.config(state="normal")
-    text_area.delete("1.0", "end")
-
-    # 단순하게 message_stack 전체를 문자열로 보여줌
-    for msg in message_stack:
-        title = msg.get("title", "")
-        preview = msg.get("preview", "")
-        time_str = msg.get("time", "")
-        ts = msg.get("timestamp", "")
-        text_area.insert("end", f"[{ts}] {title} / {preview} / {time_str}\n")
-
-    text_area.config(state="disabled")
-
-
-def on_flash():
-    """매크로의 트리거 바운스(깜빡임) 이벤트 콜백. 여기서는 단순 출력."""
-    print("FLASH detected - 트리거 깜빡임")
-
-
-# ---------------------
-# GUI 초기화
-# ---------------------
-
-def init_gui():
-    global text_area, root
-
-    root = tk.Tk()
-    root.title("카카오톡 메시지 디버그 뷰어")
-    root.geometry("800x600")
-
-    # 스크롤바 + Text 영역
-    frame = ttk.Frame(root)
-    frame.pack(fill="both", expand=True)
-
-    text_area_local = tk.Text(frame, wrap="none", state="disabled")
-    text_area_local.pack(side="left", fill="both", expand=True)
-
-    scrollbar = ttk.Scrollbar(frame, orient="vertical", command=text_area_local.yview)
-    scrollbar.pack(side="right", fill="y")
-
-    text_area_local.configure(yscrollcommand=scrollbar.set)
-
-    text_area = text_area_local
-
-    # 디버그 박스(화면 오버레이) 생성
-    init_region_overlays()
-
-    return root
-
-
-# ---------------------
-# 메인 실행
-# ---------------------
 
 def main():
-    root = init_gui()
+    # ----------------------------
+    # Tk 루트 + gui.PreviewStackgui 생성
+    # ----------------------------
+    root = tk.Tk()
+    root.title("Macro Main Controller")
 
-    # 감시 스레드 시작 (매크로 watcher)
-    t = threading.Thread(
-        target=macro.watcher_loop,
-        args=(on_detect, on_flash),
-        daemon=True
+    style = ttk.Style()
+    style.configure("TitleButton.TButton", font=("맑은 고딕", 10, "bold"))
+
+    # 좌우 split + PREVIEW_DICT 뷰어 / 예외 리스트 관리
+    app = gui.PreviewStackGUI(root)
+    
+    # 창 크기 및 위치 설정: 화면 너비의 1/5, 오른쪽에 고정 배치
+    root.update_idletasks()
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    
+    # 창 너비를 화면 너비의 1/5로 설정
+    window_width = screen_width // 5
+    # 창 높이는 화면 높이의 90%로 설정 (잘리지 않게)
+    window_height = int(screen_height * 0.9)
+    
+    # 오른쪽에 배치 (x 좌표: 화면 너비 - 창 너비)
+    x = screen_width - window_width
+    # 상단에서 약간 아래로 배치 (화면 높이의 5%)
+    y = int(screen_height * 0.05)
+    
+    # 창 크기와 위치 설정
+    root.geometry(f"{window_width}x{window_height}+{x}+{y}")
+    
+    # 창 크기 조정 비활성화 (위치 고정)
+    root.resizable(False, False)
+
+    # ----------------------------
+    # 하단 로그 영역 (title / time / preview 출력)
+    # ----------------------------
+    log_frame = ttk.Frame(root)
+    log_frame.pack(side="bottom", fill="x")
+
+    log_label = ttk.Label(log_frame, text="캡쳐 로그", font=("맑은 고딕", 10, "bold"))
+    log_label.pack(anchor="w", padx=6, pady=(4, 0))
+
+    log_text = tk.Text(log_frame, height=5, state="disabled")
+    log_scroll = ttk.Scrollbar(
+        log_frame, orient="vertical", command=log_text.yview
     )
-    t.start()
+    log_text.configure(yscrollcommand=log_scroll.set)
 
+    log_text.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=(0, 6))
+    log_scroll.pack(side="right", fill="y", padx=(0, 6), pady=(0, 6))
+
+    def append_log_line(line: str):
+        log_text.configure(state="normal")
+        log_text.insert("end", line + "\n")
+        log_text.see("end")
+        log_text.configure(state="disabled")
+
+    # ----------------------------
+    # 캡쳐 감지 시 로그 처리
+    # ----------------------------
+
+    def _log_detection(title_key, content):
+        """
+        실제 로그 찍는 함수 (메인 스레드에서 실행)
+        title_key: title 영역의 이미지 해시 또는 실제 title
+        content: 복사된 채팅 내용
+        """
+        from datetime import datetime
+        time_str = datetime.now().strftime("%H:%M:%S")
+        
+        # content의 앞부분만 미리보기로 표시 (너무 길면 잘라서)
+        preview = content[:50] + "..." if len(content) > 50 else content
+        
+        line = f"[{time_str}] [{title_key[:8]}...] 내용 저장됨 (길이: {len(content)} 문자)"
+        print(line)
+        append_log_line(line)
+
+    def on_detect(title_key, content):
+        # 마찬가지로 메인 스레드에서 UI 갱신하도록 after 사용
+        root.after(0, lambda tk=title_key, c=content: _log_detection(tk, c))
+        
+        # chatting_room 업데이트 시 schedular 호출
+        def call_scheduler():
+            def on_tag_received(tag):
+                # 메인 스레드에서 GUI 업데이트
+                root.after(0, lambda t=tag: app.update_tag(t))
+            
+            schedular.schedule_chatting_room_update(
+                title_key=title_key,
+                on_tag_received=on_tag_received
+            )
+        
+        # 별도 스레드에서 schedular 호출 (API 호출이 블로킹될 수 있음)
+        scheduler_thread = threading.Thread(target=call_scheduler, daemon=True)
+        scheduler_thread.start()
+
+    # ----------------------------
+    # 프로그램 시작 5초 대기 후 감시 시작
+    # ----------------------------
+    def start_watcher_after_delay():
+        import time
+        print("[main] 프로그램 시작, 5초 대기 중...")
+        time.sleep(5.0)
+        print("[main] 감시 시작")
+        watcher_thread = threading.Thread(
+            target=macro.watcher_loop,
+            kwargs={
+                "on_detect": on_detect,
+                # cooldown, poll_interval은 macro 기본값 사용
+            },
+            daemon=True,
+        )
+        watcher_thread.start()
+    
+    # 별도 스레드에서 5초 대기 후 감시 시작 (GUI 블로킹 방지)
+    delay_thread = threading.Thread(target=start_watcher_after_delay, daemon=True)
+    delay_thread.start()
+
+    # ----------------------------
+    # Tk 메인 루프
+    # ----------------------------
     root.mainloop()
 
 

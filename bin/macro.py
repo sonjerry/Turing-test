@@ -826,6 +826,8 @@ def process_delay_queue(on_detect=None):
     """
     global chatting_room_watching
     
+    print("[queue] 지연 큐 처리 스레드 시작됨")
+    
     # 현재 처리 중인 채팅방 (순차 처리 보장)
     current_processing_title = None
     
@@ -865,6 +867,15 @@ def process_delay_queue(on_detect=None):
                 set_queue_status(title, "processing")
                 current_processing_title = title
                 print(f"[queue] {title} 처리 시작 (선입선출)")
+                print(f"[queue] 현재 큐 상태: {len(DELAY_QUEUE)}개 항목, waiting: {len(waiting_titles)}개")
+            elif waiting_titles and chatting_room_watching:
+                print(f"[queue] waiting 항목 {len(waiting_titles)}개 있지만 chatting_room 감시 중이라 대기")
+            elif not waiting_titles:
+                # 큐에 항목이 없거나 모두 pending 상태일 때
+                if DELAY_QUEUE:
+                    pending_count = sum(1 for item in DELAY_QUEUE.values() if item["status"] == "pending")
+                    processing_count = sum(1 for item in DELAY_QUEUE.values() if item["status"] == "processing")
+                    print(f"[queue] 큐 상태: 총 {len(DELAY_QUEUE)}개, pending: {pending_count}개, processing: {processing_count}개, waiting: 0개")
                 
                 # 별도 스레드에서 처리
                 import threading
@@ -1326,8 +1337,15 @@ def watcher_loop(on_detect=None,
                         title_text = get_current_title_text()
                         
                         if title_text:
+                            # "2025"가 포함된 경우 무시 (날짜 텍스트)
+                            if "2025" in title_text:
+                                print(f"[watcher] [WARNING] OCR 결과에 '2025'가 포함되어 무시: '{title_text}'")
+                                time.sleep(poll_interval)
+                                continue
+                            
                             # key 정제: 초성, 영어, 숫자 제거
                             sanitized_title = sanitize_dict_key(title_text)
+                            print(f"[watcher] OCR 성공: '{title_text}' -> 정제된 title: '{sanitized_title}'")
                             
                             # 정제된 title로 PREVIEW_DICT에서 기존 채팅 내용 찾기
                             if sanitized_title in PREVIEW_DICT:
@@ -1343,6 +1361,16 @@ def watcher_loop(on_detect=None,
                                 # PREVIEW_DICT에 없으면 새 채팅방이므로 즉시 waiting 상태로 추가
                                 print(f"[watcher] {sanitized_title} 새 채팅방, 즉시 waiting 상태로 큐 추가")
                                 add_to_delay_queue(sanitized_title, 0.0)  # 시간 차이 0으로 추가
+                        else:
+                            print(f"[watcher] [WARNING] OCR 실패: title_text가 None입니다. OCR_AVAILABLE={OCR_AVAILABLE}")
+                            if not OCR_AVAILABLE:
+                                print(f"[watcher] [WARNING] EasyOCR이 설치되지 않았거나 초기화되지 않았습니다.")
+                            else:
+                                reader = get_ocr_reader()
+                                if reader is None:
+                                    print(f"[watcher] [WARNING] OCR reader가 None입니다. initialize_ocr()를 호출해야 합니다.")
+                                else:
+                                    print(f"[watcher] [WARNING] OCR reader는 있지만 텍스트를 인식하지 못했습니다.")
 
             time.sleep(poll_interval)
 

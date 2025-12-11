@@ -1,19 +1,6 @@
 import os
-import json
 import time
-from datetime import datetime
-from typing import Optional, Dict, Callable, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from openai import OpenAI
-
-try:
-    from openai import OpenAI
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-    OpenAI = None
-    print("[warning] openai 라이브러리가 설치되지 않았습니다. pip install openai로 설치하세요.")
+from typing import Optional, Callable
 
 import macro
 
@@ -27,49 +14,8 @@ def load_prompt(path: str = PROMPT_PATH) -> str:
     try:
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
-    except Exception as e:
-        print(f"[error] 프롬프트 파일 로드 실패: {e}")
+    except Exception:
         return ""
-
-
-def load_config(path: str = CONFIG_PATH) -> Dict:
-    """설정 파일에서 finish 좌표 등을 읽어옴"""
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"[error] 설정 파일 로드 실패: {e}")
-    return {}
-
-
-def get_openai_client():
-    """OpenAI 클라이언트 생성 (환경 변수에서 API 키 읽기)"""
-    if not OPENAI_AVAILABLE:
-        return None
-    
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("[error] OPENAI_API_KEY 환경 변수가 설정되지 않았습니다.")
-        return None
-    
-    return OpenAI(api_key=api_key)
-
-
-def format_korean_time(dt=None) -> str:
-    """현재 시간을 '오전 11:59' 형태로 반환"""
-    if dt is None:
-        dt = datetime.now()
-    
-    hour = dt.hour
-    minute = dt.minute
-    
-    ampm = "오전" if hour < 12 else "오후"
-    hour_12 = hour % 12
-    if hour_12 == 0:
-        hour_12 = 12
-    
-    return f"{ampm} {hour_12}:{minute:02d}"
 
 
 def parse_response(response_text: str) -> str:
@@ -84,11 +30,9 @@ def parse_response(response_text: str) -> str:
         return "<INSTANT>"
     elif "<WAIT>" in response_text:
         return "<WAIT>"
-    elif "<FINISH>" in response_text:
-        return "<FINISH>"
+
     else:
         # 태그를 찾을 수 없으면 기본값
-        print(f"[warning] 응답에서 태그를 찾을 수 없습니다: {response_text}")
         return "<WAIT>"
 
 
@@ -110,73 +54,114 @@ def call_scheduler_api(
     Returns:
         태그 문자열 (<INSTANT>, <WAIT>, <FINISH> 중 하나)
     """
-    if not OPENAI_AVAILABLE:
-        print("[error] OpenAI 라이브러리를 사용할 수 없습니다.")
+    print(f"[scheduler] call_scheduler_api 시작")
+    print(f"[scheduler]   - title_key: {title_key}")
+    print(f"[scheduler]   - relationship: {relationship}")
+    print(f"[scheduler]   - message_context 길이: {len(message_context)} 문자")
+    print(f"[scheduler]   - on_response 콜백 존재: {on_response is not None}")
+    
+    if not macro.OPENAI_AVAILABLE:
+        print(f"[scheduler] [ERROR] OPENAI_AVAILABLE = False")
         return None
     
-    client = get_openai_client()
+    client = macro.get_openai_client()
     if not client:
+        print(f"[scheduler] [ERROR] OpenAI 클라이언트를 가져올 수 없음")
         return None
+    print(f"[scheduler]   - OpenAI 클라이언트 획득 성공")
     
     prompt = load_prompt()
     if not prompt:
-        print("[error] 프롬프트를 로드할 수 없습니다.")
+        print(f"[scheduler] [ERROR] 프롬프트를 로드할 수 없음")
         return None
+    print(f"[scheduler]   - 프롬프트 로드 성공, 길이: {len(prompt)} 문자")
     
-    current_time = format_korean_time()
+    current_time = macro.format_korean_time()
+    print(f"[scheduler]   - 현재 시간: {current_time}")
     
     # 프롬프트에 입력 정보 추가
-    user_message = f"""RELATIONSHIP: {relationship}
-
-TIME: {current_time}
+    user_message = f"""TIME: {current_time}
+RELATIONSHIP: {relationship}
 
 MESSAGE_CONTEXT:
-{message_context}
-
-위 정보를 바탕으로 발화 타이밍을 결정하세요."""
+{message_context}"""
+    
+    # user_message 로그 출력
+    print("[scheduler] user_message:")
+    print("=" * 80)
+    print(user_message)
+    print("=" * 80)
     
     try:
+        print(f"[scheduler] OpenAI API 호출 시작 (model: gpt-5-mini)")
         response = client.chat.completions.create(
             model="gpt-5-mini",  # 또는 "gpt-4", "gpt-3.5-turbo" 등
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": user_message}
             ],
-            temperature=0.7,
-            max_tokens=50
+            max_completion_tokens=50
         )
+        print(f"[scheduler] OpenAI API 호출 완료")
+        
+        if not response or not response.choices:
+            print(f"[scheduler] [ERROR] 응답이 없거나 choices가 비어있음")
+            return None
         
         response_text = response.choices[0].message.content
+        print(f"[scheduler]   - 원본 응답 텍스트: {response_text}")
+        
         tag = parse_response(response_text)
+        print(f"[scheduler] [{title_key}] 파싱된 태그: {tag}")
         
-        print(f"[scheduler] [{title_key}] 응답: {tag}")
+        # 스케줄러 태그 반환 로그 (<WAIT>, <INSTANT>만)
+        if tag in ["<WAIT>", "<INSTANT>"]:
+            from datetime import datetime
+            time_str = datetime.now().strftime("%H:%M:%S")
+            macro.log_message(f"[{time_str}] [스케줄러] {title_key}: {tag}")
         
-        # 콜백 호출
+        # 콜백 호출 (무조건 실행)
         if on_response:
             try:
+                print(f"[scheduler] [{title_key}] 콜백 호출 시작: tag={tag}")
                 on_response(tag)
+                print(f"[scheduler] [{title_key}] 콜백 호출 완료: {tag}")
             except Exception as e:
-                print(f"[error] on_response 콜백 오류: {e}")
+                print(f"[scheduler] [{title_key}] [ERROR] 콜백 호출 중 오류 발생: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f"[scheduler] [{title_key}] [WARNING] on_response 콜백이 None입니다")
         
         return tag
         
     except Exception as e:
-        print(f"[error] OpenAI API 호출 실패: {e}")
+        print(f"[scheduler] [{title_key}] API 호출 중 오류 발생: {e}")
+        # 예외 발생 시에도 콜백 호출 시도 (태그는 None 또는 기본값)
+        if on_response:
+            try:
+                on_response("<WAIT>")
+                print(f"[scheduler] [{title_key}] 예외 발생 후 기본 태그 콜백 호출")
+            except Exception as callback_error:
+                print(f"[scheduler] [{title_key}] 예외 후 콜백 호출 중 오류: {callback_error}")
         return None
 
 
-def process_finish_action():
+def process_finish_action(title_key: str = None):
     """
     <FINISH> 태그가 반환되었을 때 실행할 액션
     1. config의 finish 좌표 클릭
     2. 채팅방 감시 종료
     3. title/preview 감시 재개
+    4. 큐에서 해당 채팅방 제거 (title_key가 제공된 경우)
+    
+    Args:
+        title_key: 채팅방 제목 (큐에서 제거하기 위해 필요)
     """
-    config = load_config()
+    config = macro.load_config_dict(CONFIG_PATH)
     finish_coord = config.get("finish")
     
     if not finish_coord or len(finish_coord) != 2:
-        print("[error] finish 좌표가 설정되지 않았습니다.")
         return
     
     import pyautogui
@@ -184,16 +169,15 @@ def process_finish_action():
     
     # finish 좌표 클릭
     pyautogui.click(x, y)
-    print(f"[scheduler] finish 좌표 클릭: ({x}, {y})")
     time.sleep(0.5)
     
     # 채팅방 감시 종료
     macro.chatting_room_watch_stopped = True
-    print("[scheduler] chatting_room 감시 종료됨")
+    macro.chatting_room_watching = False  # 큐 처리 재개
     
-    # title/preview 감시 재개 (watch_stopped 플래그 해제)
-    macro.watch_stopped = False
-    print("[scheduler] title/preview 감시 재개됨")
+    # 큐에서 해당 채팅방 제거
+    if title_key:
+        macro.remove_from_queue(title_key)
 
 
 def schedule_chatting_room_update(
@@ -208,31 +192,81 @@ def schedule_chatting_room_update(
         title_key: 채팅방 제목
         on_tag_received: 태그를 받았을 때 호출할 콜백 (태그 문자열)
     """
+    print(f"[scheduler] schedule_chatting_room_update 호출됨")
+    print(f"[scheduler]   - title_key: {title_key}")
+    print(f"[scheduler]   - on_tag_received 콜백 존재: {on_tag_received is not None}")
+    print(f"[scheduler]   - PREVIEW_DICT에 title_key 존재: {title_key in macro.PREVIEW_DICT}")
+    
     if title_key not in macro.PREVIEW_DICT:
-        print(f"[scheduler] [{title_key}] PREVIEW_DICT에 내용이 없습니다.")
+        print(f"[scheduler] [ERROR] title_key가 PREVIEW_DICT에 없음: {title_key}")
+        print(f"[scheduler]   - PREVIEW_DICT의 키 목록: {list(macro.PREVIEW_DICT.keys())[:5]}...")
         return
     
     message_context = macro.PREVIEW_DICT[title_key]
+    print(f"[scheduler]   - message_context 길이: {len(message_context)} 문자")
+    print(f"[scheduler]   - message_context 미리보기: {message_context[:100]}...")
     
-    # 관계 유형 결정 (기본값: FRIEND, 추후 확장 가능)
-    relationship = "FRIEND"
+    # 날짜 줄 제거
+    message_context_before = len(message_context)
+    message_context = macro.remove_date_header(message_context)
+    message_context_after = len(message_context)
+    print(f"[scheduler]   - 날짜 줄 제거 후 길이: {message_context_before} -> {message_context_after} 문자")
+    
+    # 관계 유형 결정
+    relationship = macro.get_chat_relationship_tag(title_key)
+    print(f"[scheduler]   - relationship: {relationship}")
     
     # API 호출
+    print(f"[scheduler] call_scheduler_api 호출 시작...")
+    received_tag = [None]  # 콜백에서 받은 태그를 저장하기 위한 리스트
+    
+    def ensure_callback(tag_value):
+        """콜백이 확실히 호출되도록 보장하는 래퍼"""
+        print(f"[scheduler] ensure_callback 호출됨: tag={tag_value}")
+        received_tag[0] = tag_value
+        _handle_tag_response(tag_value, on_tag_received)
+    
     tag = call_scheduler_api(
         title_key=title_key,
         message_context=message_context,
         relationship=relationship,
-        on_response=lambda t: _handle_tag_response(t, on_tag_received)
+        on_response=ensure_callback
     )
+    print(f"[scheduler] call_scheduler_api 호출 완료, 반환된 tag: {tag}")
+    print(f"[scheduler] 콜백에서 받은 tag: {received_tag[0]}")
+    
+    # 태그가 있으면 무조건 콜백 호출 (이중 보장)
+    final_tag = tag or received_tag[0]
+    if final_tag and final_tag in ["<WAIT>", "<INSTANT>", "<FINISH>"]:
+        print(f"[scheduler] 최종 태그 확인: {final_tag}, 콜백 재호출 보장")
+        if on_tag_received:
+            try:
+                on_tag_received(final_tag)
+                print(f"[scheduler] 최종 태그 콜백 호출 완료: {final_tag}")
+            except Exception as e:
+                print(f"[scheduler] [ERROR] 최종 태그 콜백 호출 중 오류: {e}")
+                import traceback
+                traceback.print_exc()
     
     if tag == "<FINISH>":
-        process_finish_action()
+        print(f"[scheduler] <FINISH> 태그 감지, process_finish_action 호출")
+        process_finish_action(title_key)
 
 
 def _handle_tag_response(tag: str, on_tag_received: Optional[Callable[[str], None]]):
     """태그 응답 처리"""
+    print(f"[scheduler] _handle_tag_response 호출됨")
+    print(f"[scheduler]   - tag: {tag}")
+    print(f"[scheduler]   - on_tag_received 콜백 존재: {on_tag_received is not None}")
+    
     if on_tag_received:
         try:
+            print(f"[scheduler] on_tag_received 콜백 호출 시작")
             on_tag_received(tag)
+            print(f"[scheduler] _handle_tag_response 콜백 호출 완료")
         except Exception as e:
-            print(f"[error] on_tag_received 콜백 오류: {e}")
+            print(f"[scheduler] [ERROR] _handle_tag_response 콜백 호출 중 오류 발생: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print(f"[scheduler] [WARNING] on_tag_received 콜백이 None입니다 - GUI 업데이트 불가능")

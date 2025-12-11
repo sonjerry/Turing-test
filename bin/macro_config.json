@@ -1,9 +1,16 @@
 {
   "REGIONS": {
     "title": [204, 192, 384, 40],
-    "preview": [204, 220, 625, 58]
+    "preview": [204, 220, 384, 40],
+    "title2": [213, 296, 384, 40],
+    "title3": [213, 404, 384, 40],
+    "title4": [213, 509, 384, 40],
+    "title5": [210, 606, 384, 40],
+    "title6": [211, 708, 384, 40]
   },
-  "chatting_room_center": [1204, 439],
-  "chatting_room": [979, 143,522,641],
-  "finish": [1496, 557]
+  "chatting_room_center": [972, 792],
+  "chatting_room": [979, 143, 522, 641],
+  "finish": [1507, 19],
+  "chat_input": [1230, 912],
+  "send_button": [1476, 997]
 }

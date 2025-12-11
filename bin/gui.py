@@ -7,25 +7,28 @@ import macro  # PREVIEW_DICT, EXCEPTION_TITLES 사용
 class PreviewStackGUI:
     def __init__(self, master):
         self.master = master
-        self.master.title("Macro Preview Stack Viewer")
+        self.master.title("매크로")
 
-        # 전체를 가로로 나누는 PanedWindow
-        self.paned = ttk.Panedwindow(master, orient="horizontal")
+        # 전체를 세로로 나누는 PanedWindow (3등분)
+        self.paned = ttk.Panedwindow(master, orient="vertical")
         self.paned.pack(fill="both", expand=True)
 
-        # 좌측 영역 (타이틀 / 프리뷰)
-        self.left_frame = ttk.Frame(self.paned)
-        self.paned.add(self.left_frame, weight=3)
+        # 첫 번째 영역: 채팅방 로그
+        self.chat_frame = ttk.Frame(self.paned)
+        self.paned.add(self.chat_frame, weight=1)
 
-        # 우측 영역 (스케줄러 태그 표시)
-        self.right_frame = ttk.Frame(self.paned)
-        self.paned.add(self.right_frame, weight=1)
+        # 두 번째 영역: 태그 3개
+        self.tag_frame = ttk.Frame(self.paned)
+        self.paned.add(self.tag_frame, weight=1)
 
-        # 왼쪽 스크롤 가능한 리스트 영역 구성
-        self._build_left_panel()
+        # 세 번째 영역: 지연 큐
+        self.queue_frame = ttk.Frame(self.paned)
+        self.paned.add(self.queue_frame, weight=1)
 
-        # 오른쪽 스케줄러 태그 패널 구성
-        self._build_right_panel()
+        # 각 패널 구성
+        self._build_chat_panel()
+        self._build_tag_panel()
+        self._build_queue_panel()
         
         # 현재 활성화된 태그 (None이면 모두 비활성화)
         self.current_tag = None
@@ -37,49 +40,52 @@ class PreviewStackGUI:
         # 주기적으로 PREVIEW_DICT 반영
         self._refresh_interval_ms = 1000  # 1초
         self._schedule_refresh()
+        
+        # 주기적으로 큐 상태 반영
+        self._schedule_queue_refresh()
 
     # ------------------------------
-    # 좌측 패널: PREVIEW_DICT 뷰어
+    # 첫 번째 패널: 채팅방 로그
     # ------------------------------
-    def _build_left_panel(self):
-        # 스크롤 영역용 캔버스 + 프레임
-        self.left_canvas = tk.Canvas(self.left_frame)
-        self.left_scrollbar = ttk.Scrollbar(
-            self.left_frame, orient="vertical", command=self.left_canvas.yview
-        )
-        self.left_canvas.configure(yscrollcommand=self.left_scrollbar.set)
-
-        self.left_canvas.pack(side="left", fill="both", expand=True)
-        self.left_scrollbar.pack(side="right", fill="y")
-
-        # 캔버스 안에 실제 내용을 넣을 프레임
-        self.inner_left_frame = ttk.Frame(self.left_canvas)
-        self.left_canvas.create_window(
-            (0, 0), window=self.inner_left_frame, anchor="nw"
-        )
-
-        # 스크롤 영역 리사이즈 처리
-        self.inner_left_frame.bind(
-            "<Configure>",
-            lambda e: self.left_canvas.configure(
-                scrollregion=self.left_canvas.bbox("all")
-            ),
-        )
-
+    def _build_chat_panel(self):
         # 제목
         title_label = ttk.Label(
-            self.inner_left_frame,
-            text="채팅방별 PREVIEW 스택",
+            self.chat_frame,
+            text="채팅방 로그",
             font=("맑은 고딕", 11, "bold"),
         )
         title_label.pack(anchor="w", padx=6, pady=(6, 4))
+
+        # 스크롤 영역용 캔버스 + 프레임
+        self.chat_canvas = tk.Canvas(self.chat_frame)
+        self.chat_scrollbar = ttk.Scrollbar(
+            self.chat_frame, orient="vertical", command=self.chat_canvas.yview
+        )
+        self.chat_canvas.configure(yscrollcommand=self.chat_scrollbar.set)
+
+        self.chat_canvas.pack(side="left", fill="both", expand=True)
+        self.chat_scrollbar.pack(side="right", fill="y")
+
+        # 캔버스 안에 실제 내용을 넣을 프레임
+        self.inner_chat_frame = ttk.Frame(self.chat_canvas)
+        self.chat_canvas.create_window(
+            (0, 0), window=self.inner_chat_frame, anchor="nw"
+        )
+
+        # 스크롤 영역 리사이즈 처리
+        self.inner_chat_frame.bind(
+            "<Configure>",
+            lambda e: self.chat_canvas.configure(
+                scrollregion=self.chat_canvas.bbox("all")
+            ),
+        )
 
     def _create_title_widget(self, chat_title):
         """
         아직 UI에 없는 title에 대해,
         헤더 버튼 + 펼쳐지는 내용 Label을 가진 프레임 생성
         """
-        outer = ttk.Frame(self.inner_left_frame)
+        outer = ttk.Frame(self.inner_chat_frame)
         outer.pack(fill="x", padx=4, pady=2, anchor="n")
 
         # 헤더 버튼 (클릭 시 펼치기/접기)
@@ -163,42 +169,42 @@ class PreviewStackGUI:
 
     def _schedule_refresh(self):
         """
-        주기적으로 PREVIEW_DICT를 읽어서 좌측 UI 갱신
+        주기적으로 PREVIEW_DICT를 읽어서 채팅방 로그 UI 갱신
         """
         self._refresh_titles_from_dict()
         self.master.after(self._refresh_interval_ms, self._schedule_refresh)
 
     # ------------------------------
-    # 우측 패널: 스케줄러 태그 표시
+    # 두 번째 패널: 태그 3개
     # ------------------------------
-    def _build_right_panel(self):
+    def _build_tag_panel(self):
         # 제목
-        right_title = ttk.Label(
-            self.right_frame,
+        tag_title = ttk.Label(
+            self.tag_frame,
             text="스케줄러 태그",
             font=("맑은 고딕", 11, "bold"),
         )
-        right_title.pack(anchor="w", padx=6, pady=(6, 4))
+        tag_title.pack(anchor="w", padx=6, pady=(6, 4))
 
         # 설명
         desc = ttk.Label(
-            self.right_frame,
+            self.tag_frame,
             text="모델의 응답 태그",
             justify="left",
         )
         desc.pack(anchor="w", padx=6, pady=(0, 8))
 
-        # 태그 프레임
-        tag_frame = ttk.Frame(self.right_frame)
-        tag_frame.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+        # 태그 컨테이너 프레임
+        tag_container = ttk.Frame(self.tag_frame)
+        tag_container.pack(fill="both", expand=True, padx=6, pady=(0, 6))
 
         # 3개 태그 라벨 생성 및 저장
         self.tag_labels = {}
-        tags = ["<INSTANT>", "<WAIT>", "<FINISH>"]
+        tags = ["<INSTANT>", "<WAIT>"]
         
         for tag in tags:
             label = tk.Label(
-                tag_frame,
+                tag_container,
                 text=tag,
                 font=("맑은 고딕", 12, "bold"),
                 bg="white",
@@ -211,25 +217,126 @@ class PreviewStackGUI:
             label.pack(fill="x", padx=4, pady=4)
             self.tag_labels[tag] = label
 
+    # ------------------------------
+    # 세 번째 패널: 지연 큐
+    # ------------------------------
+    def _build_queue_panel(self):
+        # 큐 리스트 제목
+        queue_title = ttk.Label(
+            self.queue_frame,
+            text="지연 큐",
+            font=("맑은 고딕", 11, "bold"),
+        )
+        queue_title.pack(anchor="w", padx=6, pady=(6, 4))
+        
+        # 큐 리스트 스크롤 영역
+        queue_canvas = tk.Canvas(self.queue_frame)
+        queue_scrollbar = ttk.Scrollbar(
+            self.queue_frame, orient="vertical", command=queue_canvas.yview
+        )
+        queue_canvas.configure(yscrollcommand=queue_scrollbar.set)
+        
+        queue_canvas.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=(0, 6))
+        queue_scrollbar.pack(side="right", fill="y", padx=(0, 6), pady=(0, 6))
+        
+        # 큐 리스트 내부 프레임
+        self.queue_inner_frame = ttk.Frame(queue_canvas)
+        queue_canvas.create_window((0, 0), window=self.queue_inner_frame, anchor="nw")
+        
+        # 스크롤 영역 리사이즈 처리
+        self.queue_inner_frame.bind(
+            "<Configure>",
+            lambda e: queue_canvas.configure(
+                scrollregion=queue_canvas.bbox("all")
+            ),
+        )
+        
+        # 큐 항목 위젯 저장용
+        # {title: Label}
+        self.queue_widgets = {}
+
     def update_tag(self, tag: str):
         """
-        모델의 리턴 태그에 따라 해당 태그를 빨간색으로 변경
-        다른 태그는 기본 색상(검은색)으로 변경
+        스케줄러가 반환한 태그에 따라 태그 색상 변경
+        - <INSTANT>: 파란색
+        - <WAIT>: 빨간색
+        - 다른 태그는 검은색
         
         Args:
-            tag: 모델이 반환한 태그 (<INSTANT>, <WAIT>, <FINISH> 중 하나)
+            tag: 스케줄러가 반환한 태그 (<INSTANT>, <WAIT>)
         """
-        # 모든 태그를 기본 색상으로 초기화
-        for tag_name, label in self.tag_labels.items():
-            label.configure(fg="black", bg="white")
-        
-        # 해당 태그를 빨간색으로 변경
-        if tag in self.tag_labels:
-            self.tag_labels[tag].configure(fg="red", bg="#ffe6e6")
+        try:
+            # 태그가 유효한지 확인
+            if tag not in self.tag_labels:
+                return
+            
+            # 모든 태그를 검은색으로 초기화
+            for tag_name, label in self.tag_labels.items():
+                label.configure(fg="black", bg="white")
+            
+            # 해당 태그에 따라 색상 변경
+            target_label = self.tag_labels[tag]
+            if tag == "<INSTANT>":
+                target_label.configure(fg="blue", bg="#e6f3ff")
+            elif tag == "<WAIT>":
+                target_label.configure(fg="red", bg="#ffe6e6")
+            else:
+                target_label.configure(fg="black", bg="white")
+            
             self.current_tag = tag
-        else:
-            print(f"[warning] 알 수 없는 태그: {tag}")
-            self.current_tag = None
+        except Exception as e:
+            print(f"[GUI] [ERROR] update_tag 실행 중 오류 발생: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _refresh_queue_list(self):
+        """
+        지연 큐 상태를 읽어서 GUI에 표시.
+        """
+        # 기존 위젯 제거
+        for widget in self.queue_inner_frame.winfo_children():
+            widget.destroy()
+        self.queue_widgets.clear()
+        
+        # 큐에서 모든 항목 가져오기
+        for title in macro.DELAY_QUEUE.keys():
+            queue_status = macro.get_queue_status(title)
+            if queue_status is None:
+                continue
+            
+            status = queue_status["status"]
+            remaining_seconds = queue_status["remaining_seconds"]
+            
+            # 상태에 따라 표시 텍스트 생성
+            if status == "waiting":
+                display_text = f"{title}: Wait..."
+            else:
+                # 남은 시간을 MM:SS 형식으로 변환
+                minutes = int(remaining_seconds // 60)
+                seconds = int(remaining_seconds % 60)
+                display_text = f"{title}: {minutes:02d}:{seconds:02d}"
+            
+            # 라벨 생성
+            label = tk.Label(
+                self.queue_inner_frame,
+                text=display_text,
+                font=("맑은 고딕", 9),
+                bg="white",
+                fg="black",
+                relief="solid",
+                bd=1,
+                padx=6,
+                pady=4
+            )
+            label.pack(fill="x", padx=4, pady=2)
+            self.queue_widgets[title] = label
+    
+    def _schedule_queue_refresh(self):
+        """
+        주기적으로 큐 상태를 읽어서 지연 큐 UI 갱신
+        """
+        self._refresh_queue_list()
+        self.master.after(self._refresh_interval_ms, self._schedule_queue_refresh)
 
 
 def main():

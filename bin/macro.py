@@ -868,14 +868,6 @@ def process_delay_queue(on_detect=None):
                 current_processing_title = title
                 print(f"[queue] {title} 처리 시작 (선입선출)")
                 print(f"[queue] 현재 큐 상태: {len(DELAY_QUEUE)}개 항목, waiting: {len(waiting_titles)}개")
-            elif waiting_titles and chatting_room_watching:
-                print(f"[queue] waiting 항목 {len(waiting_titles)}개 있지만 chatting_room 감시 중이라 대기")
-            elif not waiting_titles:
-                # 큐에 항목이 없거나 모두 pending 상태일 때
-                if DELAY_QUEUE:
-                    pending_count = sum(1 for item in DELAY_QUEUE.values() if item["status"] == "pending")
-                    processing_count = sum(1 for item in DELAY_QUEUE.values() if item["status"] == "processing")
-                    print(f"[queue] 큐 상태: 총 {len(DELAY_QUEUE)}개, pending: {pending_count}개, processing: {processing_count}개, waiting: 0개")
                 
                 # 별도 스레드에서 처리
                 import threading
@@ -928,6 +920,14 @@ def process_delay_queue(on_detect=None):
                 
                 thread = threading.Thread(target=process_in_thread, daemon=True)
                 thread.start()
+            elif waiting_titles and chatting_room_watching:
+                print(f"[queue] waiting 항목 {len(waiting_titles)}개 있지만 chatting_room 감시 중이라 대기")
+            elif not waiting_titles:
+                # 큐에 항목이 없거나 모두 pending 상태일 때
+                if DELAY_QUEUE:
+                    pending_count = sum(1 for item in DELAY_QUEUE.values() if item["status"] == "pending")
+                    processing_count = sum(1 for item in DELAY_QUEUE.values() if item["status"] == "processing")
+                    print(f"[queue] 큐 상태: 총 {len(DELAY_QUEUE)}개, pending: {pending_count}개, processing: {processing_count}개, waiting: 0개")
             
             time.sleep(0.5)  # 0.5초마다 큐 확인
             
